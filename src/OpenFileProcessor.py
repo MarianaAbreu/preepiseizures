@@ -95,7 +95,7 @@ class OpenFileProcessor:
                          self.start_date = datetime.strptime(header[date_key] + ' ' + header[time_key], '%Y-%m-%d %H:%M:%S.')
 
 
-               print(self.start_date)
+               # print(self.start_date)
                return
 
           elif self.mode.upper() == 'SCIENTISST':
