@@ -11,6 +11,7 @@ import biosppy as bp
 import numpy as np
 import pandas as pd
 from scipy.signal import find_peaks, resample
+from scipy.spatial import KDTree
 
 # local
 
@@ -104,7 +105,7 @@ def ecg_segment_norm(ecg_df):
 
 def ecg_processing(ecg_df, sampling_rate):
     """
-    Receives ECG sing             le channel in a dataframe format with a column of datetime
+    Receives ECG single channel in a dataframe format with a column of datetime
     Returns the same dataframe with filtered data and resampled to 80Hz
     """
     # get ecg filtered
@@ -113,6 +114,50 @@ def ecg_processing(ecg_df, sampling_rate):
     resampled = resample(ecg, int(len(ecg)*80 / sampling_rate))
     resampled_time = pd.date_range(ecg_df.index[0], ecg_df.index[-1], periods=len(resampled))
     ecg_df = pd.DataFrame(resampled, index=resampled_time, columns=['ECG'])    
+    # check inversion: calculate rpeaks for the original and inverted signal
+    good_ecg = None
+    start_time = ecg_df.index[0] + pd.Timedelta(seconds=300)
+    while good_ecg is None:
+        temp_ecg = ecg_df.loc[start_time:start_time + pd.Timedelta(seconds=10)]
+        if (temp_ecg['ECG'].kurt()) < 5 or (temp_ecg['ECG'].kurt()) > 100:
+            start_time += pd.Timedelta(seconds=120)
+        else:
+            good_ecg = temp_ecg.copy()
+        if start_time >= ecg_df.index[-1]:
+            print('problem')
+
+    if (good_ecg is None) or (len(good_ecg) < 400):
+        good_ecg = ecg_df.copy()
+
+    r_peaks = bp.signals.ecg.hamilton_segmenter(signal=good_ecg['ECG'], sampling_rate=80)['rpeaks']
+    r_peaks = bp.signals.ecg.correct_rpeaks(signal=good_ecg['ECG'], rpeaks=r_peaks, sampling_rate=80, tol=0.05)['rpeaks']
+    r_peaks_i = bp.signals.ecg.hamilton_segmenter(signal=good_ecg['ECG']*-1, sampling_rate=80)['rpeaks']
+    r_peaks_i = bp.signals.ecg.correct_rpeaks(signal=good_ecg['ECG']*-1, rpeaks=r_peaks_i, sampling_rate=80, tol=0.05)['rpeaks']
+    # if the difference between the two is less than 5 in absolute, the calculation is correct
+    # Define a threshold for how close numbers need to be
+    threshold = 5
+    # Create new lists with only the elements that are close to an element in the other list
+    #rp_new = np.array([i for i in r_peaks if any(abs(i - j) <= threshold for j in r_peaks_i)])
+    #rpi_new = np.array([i for i in r_peaks_i if any(abs(i - j) <= threshold for j in r_peaks)])
+    tree = KDTree(r_peaks_i.reshape(-1, 1))
+
+    # Query the tree for the nearest neighbor of each point in 'x' within the threshold
+    distances, indices = tree.query(r_peaks.reshape(-1, 1), distance_upper_bound=threshold)
+
+    # Filter 'x' and 'y' based on the query results
+    rp_new = r_peaks[distances != np.inf]
+    rpi_new = r_peaks_i[indices[distances != np.inf]]
+    if (len(rp_new) != len(rpi_new)):
+        print('Problem with the first 10 minutes of the signal.')
+        # delete first or last peak
+        
+    r_peak_diff = np.median(rp_new - rpi_new)
+    if abs(r_peak_diff) < 5:
+        if r_peak_diff > 0: # signal is inverted if the difference is positive
+            ecg_df['ECG'] = ecg_df['ECG']*-1
+            print('ECG signal inverted.')
+    else:
+        print('ECG signal not inverted. Problem with the first 10 minutes of the signal.')
     return ecg_df
 
 
@@ -175,7 +220,7 @@ def resp_processing(resp_df, sampling_rate):
 
     # 2) Normalisation (mean=0, std=1)
     norm_sig = (segment_filt_downsampled - np.mean(segment_filt_downsampled)) / np.std(segment_filt_downsampled)
-    resp_rate = resp_rate(norm_sig, sampling_rate=5)
+    resp_rates = resp_rate(norm_sig, sampling_rate=5)
 
     return resp_df
     
