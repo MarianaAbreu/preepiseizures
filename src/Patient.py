@@ -23,8 +23,8 @@ class Patient():
     Patient class to store patient information
     """
     def __init__(self, patient_id, main_dir) -> None:
-        self.id = patient_id
 
+        self.id = patient_id
         self.patient_dict = self.get_patient_dict()
         self.dir = self.get_patient_dir(main_dir)
         self.datafile = OpenFileProcessor.OpenFileProcessor(mode='EPIBOX')
@@ -78,29 +78,43 @@ class Patient():
         self.seizure_table = pd.DataFrame()
 
         if self.patient_dict['source'] == 'HSM':
-            try:
-                seizure_table = pd.read_excel('/Volumes/T7 Touch/PreEpiSeizures/Patients_HSM/Patients_HSM_.xlsx', sheet_name=self.patient_dict['touch'])
-                self.seizure_table = seizure_table[seizure_table['Crises'].notna()].copy()
-            except:
-                if self.patient_dict['wearable_dir'] == '':
-                    print(f"Seizure label file not found for patient {self.id} but also no wearable data")
-                else:
-                    print(f"Seizure label file not found for patient {self.id}")
-            if (self.seizure_table.empty or self.seizure_table['Crises'].iloc[0] == 0):
-                print(f"No seizure annotations found for patient {self.id}")
-                return None
-            self.seizure_table.loc[:, 'Data'] = [datetime.strptime(date, '%d-%m-%Y') if type(date) is str else date for date in self.seizure_table['Data']]
-            self.seizure_table.loc[:, 'Timestamp'] = [datetime.combine(self.seizure_table.iloc[sidx]['Data'], 
-                                                                self.seizure_table.iloc[sidx]['Hora Clínica']) for 
-                                                                sidx in range(len(self.seizure_table))]
-        else:      
-            seizure_dir = [file for file in os.listdir(self.dir) if ("seizure_label" in file and not file.startswith('._')) ]
-            if len(seizure_dir) == 1:
-                self.seizure_table = pd.read_csv(os.path.join(self.dir, seizure_dir[0]), index_col=0) 
-            if self.seizure_table.empty:
-                print(f"No seizure annotations found for patient {self.id}")
-                return None
-            self.seizure_table.loc[:, 'Timestamp'] = [datetime.strptime(date, '%d-%m-%Y\n%H:%M:%S') for date in self.seizure_table['Date']]
+
+            excel_file = 'Patients_HSM_.xlsx'
+        
+        else:
+            excel_file = 'Pat_HEM.xlsx'
+        try:
+            seizure_table = pd.read_excel(os.path.join('/Volumes', 'T7 Touch', 'PreEpiSeizures', 'Patients_'+self.patient_dict['source'], excel_file), sheet_name=self.patient_dict['touch'])
+            self.seizure_table = seizure_table[seizure_table['Crises'].notna()].copy()
+        except:
+            if self.patient_dict['wearable_dir'] == '':
+                print(f"Seizure label file not found for patient {self.id} but also no wearable data")
+            else:
+                print(f"Seizure label file not found for patient {self.id}")
+        if (self.seizure_table.empty or self.seizure_table['Crises'].iloc[0] == 0):
+            print(f"No seizure annotations found for patient {self.id}")
+            return None
+        self.seizure_table.loc[:, 'Data'] = [datetime.strptime(date, '%d-%m-%Y') if type(date) is str else date for date in self.seizure_table['Data']]
+        self.seizure_table.loc[:, 'Timestamp'] = [datetime.combine(self.seizure_table.iloc[sidx]['Data'], 
+                                                            self.seizure_table.iloc[sidx]['Hora Clínica']) for 
+                                                            sidx in range(len(self.seizure_table))]
+        # else: 
+        #     try: 
+        #         seizure_table = pd.read_excel('/Volumes/T7 Touch/PreEpiSeizures/Patients_HSM/Pat_HEM_.xlsx', sheet_name=self.patient_dict['touch'])
+        #         self.seizure_table = seizure_table[seizure_table['Crises'].notna()].copy()
+        #     except:
+        #         if self.patient_dict['wearable_dir'] == '':
+        #             print(f"Seizure label file not found for patient {self.id} but also no wearable data")
+        #         else:
+        #             print(f"Seizure label file not found for patient {self.id}")
+
+        #     seizure_dir = [file for file in os.listdir(self.dir) if ("seizure_label" in file and not file.startswith('._')) ]
+        #     if len(seizure_dir) == 1:
+        #         self.seizure_table = pd.read_csv(os.path.join(self.dir, seizure_dir[0]), index_col=0) 
+        #     if self.seizure_table.empty:
+        #         print(f"No seizure annotations found for patient {self.id}")
+        #         return None
+        #     self.seizure_table.loc[:, 'Timestamp'] = [datetime.strptime(date, '%d-%m-%Y\n%H:%M:%S') for date in self.seizure_table['Date']]
         if 'Timestamp' not in self.seizure_table.columns:
             print(f"No seizure annotations found for patient {self.id}")
             return None
@@ -420,7 +434,11 @@ def correct_patient(df, patient, patient_dict=json.load(open('patient_info.json'
         df['datetime'] = start_date + delta
         return df
     elif patient == 'OXDN':
-        timestamp_wrong = df.where(df['datetime'].diff() > pd.Timedelta(days=1)).dropna().index[0]
+        df_wrong = df.where(df['datetime'].diff() > pd.Timedelta(days=1)).dropna().copy()
+        if df_wrong.empty:
+            timestamp_wrong = 0
+        else:
+            timestamp_wrong = df_wrong.index[0]
         return df.iloc[timestamp_wrong:]
     elif patient == 'AGGA':
         timestamp_wrong = df.where(df['datetime'].diff() > pd.Timedelta(days=1)).dropna()
@@ -460,8 +478,11 @@ class HSMdata():
         """
         if 'edf' in filedir:
             # open files ending with edf
-            hsm_data = read_raw_edf(filedir, encoding='latin1')
-
+            try:
+                hsm_data = read_raw_edf(filedir, encoding='latin1')
+            except Exception as e:
+                print(e)
+                return [], None
         else:
             # open files ending with EEG
             try:
@@ -636,7 +657,10 @@ class HEMdata():
         find_idx = [hch for hch in range(len(ch_list)) if 'ecg' in ch_list[hch].lower()]
         if len(find_idx) != 2:
             print('ECG channels in trc file are not 2')
-            pass        
+            if self.id == 'WVKA':
+                find_idx = [33, 34]     
+            else:
+                print('Solve')   
         data = pd.DataFrame(np.array(hem_sig[:, find_idx]), columns=['ECG1', 'ECG2'])   
 
         return data, hem_data.rec_datetime

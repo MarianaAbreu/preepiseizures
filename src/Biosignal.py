@@ -129,6 +129,8 @@ class Biosignal():
             if hosp_class is None:
                 raise IOError('Needs the HSM class as input')
             data, start_time = hosp_class.read_file_data(filedir)
+            if len(data) < 1:
+                return pd.DataFrame()
             ecg_df = data['ECG2'] - data['ECG1']
             ecg_df.index = pd.date_range(start_time, periods=len(ecg_df), freq=str(1/fs)+'S')
         if self.source == 'wearable':
@@ -169,23 +171,23 @@ class Biosignal():
         i = 0
         # if files_list is empty, process all files
         if files_list == []:
-            files_list = sorted(list(filter(lambda file: (file.upper().endswith('.EDF') or file.upper().endswith('.EEG')), os.listdir(hosp_dir))))
+            files_list = sorted(list(filter(lambda file: (file.upper().endswith('.EDF') or file.upper().endswith('.EEG') or file.upper().endswith('.TRC')), os.listdir(hosp_dir))))
         if files_list == []:
             print('No files found')
-            return None
+            return -1
         if patient_class.patient_dict['source'] == 'HEM':
             hosp_class = Patient.HEMdata(patient_id=patient_class.id, dir=patient_class.dir)
         else:
             hosp_class = Patient.HSMdata(patient_id=patient_class.id, dir=patient_class.dir)
         
         self.FS = int(hosp_class.FS)
-
+        print(files_list)
         i = 0
         # termination of files is different for each hospital
         # hospital_files_ending = [file for file in os.listdir(hosp_dir) if file.lower()[-3:] in ['eeg', 'edf', 'trc']]
         for filename in files_list:
-            if filepath == '':
-                filepath = f'data{os.sep}segments{os.sep}{filename[:-4]}_{patient_class.id}_{self.source}_{self.sensor}_ecg80.parquet'
+            
+            filepath = f'data{os.sep}segments{os.sep}{patient_class.id}{os.sep}{filename[:-4]}_{patient_class.id}_{self.sensor}_hospital_ecg80.parquet'
             # get ecg data resampled from hospital
             if os.path.isfile(filepath):
                 continue
@@ -195,10 +197,15 @@ class Biosignal():
                 print(f"Processing {i}/{len(files_list)}", end='\r')  
                 i += 1
                 hosp_ecg = self.get_ecg_data(patient_class, os.path.join(hosp_dir, filename), hosp_class=hosp_class)
+                if hosp_ecg.empty:
+                    print(f'Empty file {filename}')
+                    continue
                 ecg_df = biosignal_processing.ecg_processing(hosp_ecg, self.FS)
-                ecg_df.to_parquet(f'data{os.sep}segments{os.sep}{filename[:-4]}_{patient_class.id}_{self.sensor}_hospital_ecg80.parquet', engine='fastparquet')
-        
-
+                if not os.path.isdir('data' + os.sep + 'segments' + os.sep + patient_class.id):
+                    os.mkdir('data' + os.sep + 'segments' + os.sep + patient_class.id)
+                ecg_df.to_parquet(f'data{os.sep}segments{os.sep}{patient_class.id}{os.sep}{filename[:-4]}_{patient_class.id}_{self.sensor}_hospital_ecg80.parquet', engine='fastparquet')
+        return 1
+    
     def calc_ecg_hospital_segments(self, patient_class, filepath='', files_list=[]) -> pd.DataFrame:
         """
         Open parquet files with resampled data and join them together
@@ -225,7 +232,7 @@ class Biosignal():
             return None
 
 
-        filedir = os.path.join(f'data{os.sep}segments')
+        filedir = os.path.join(f'data{os.sep}segments{os.sep}{patient_class.id}')
         files_list = sorted([file for file in os.listdir(filedir) if (file.endswith('ecg80.parquet')) and (patient_class.id in file)])
         if files_list == []:
             self.get_ecg_hospital_data(patient_class)
@@ -243,7 +250,69 @@ class Biosignal():
         all_ecg.reset_index(drop=True, inplace=True)
         all_segments = pd.concat(list(map(lambda x: biosignal_processing.ecg_segment_norm(all_ecg.loc[all_ecg['timestamp'].between(x, x+window)].copy()), segment_times)))
         all_segments.to_parquet(f'data{os.sep}segments{os.sep}{patient_class.id}_{self.sensor}_hospital_segments.parquet', engine='fastparquet')
-        
+
+    def calc_resp_wearable_segments(self, patient_class, filepath='', files_list=[]) -> pd.DataFrame:
+        """
+        Get all resp from wearable files and save to parquet files
+        Since this can take a while, each file is processed individually and saved to a parquet file indivdually
+        The name of the parquet file will be the same as the txt file plus sensor_features.parquet
+        ----
+        Parameters:
+            patient_class: Patient - Patient class
+            filepath: str - Path to parquet file
+            files_list: list - List of files to process - if empty, process all files - files need to end with txt and exist in filepath
+        ----
+        Returns:
+            acc_df: pd.DataFrame - Dataframe with all acc data
+
+        """
+        # define filename where the sensor processed data will be saved
+        #if filepath == '':
+        #    filepath = f'data{os.sep}features{os.sep}{filename[:-4]}_{patient_class.id}_{self.source}_{self.sensor}_features.parquet'
+        # if the filepath already exists, get sensor data without any other processing
+        if os.path.isfile(filepath):
+            return pd.read_parquet(filepath)
+
+        if self.FS is None:
+            self.FS = int(1000)
+        fs = self.FS
+        # directory to sensor files
+        filedir = os.path.join(patient_class.dir, patient_class.patient_dict['wearable_dir'])
+        # all_acc = pd.DataFrame()
+        i = 0
+        # if files_list is empty, process all files
+        if files_list == []:
+            files_list = os.listdir(filedir)
+
+        for filename in files_list:
+            # get data from one file
+            print(f"Processing {i}/{len(files_list)}", end='\r')  
+            i += 1
+            if os.path.isfile(f'data{os.sep}features{os.sep}{filename[:-4]}_{patient_class.id}_{self.sensor}_features.parquet'):
+                continue
+            patient_class.datafile.process_chunks(filedir + os.sep + filename, patient_class.patient_dict)
+            data = patient_class.datafile.data_values
+            if data.empty:
+                continue
+            # get a timestamp per sample
+            time_range = pd.date_range(patient_class.datafile.start_date, periods=len(data), freq=str(1/fs)+'S')
+            data.index = time_range            
+            if 'PZT' not in data.columns:
+                raise IOError('No PZT column in data')
+            resp_data = biosignal_processing.resp_processing(data['PZT'], fs)
+            # data values should have std != 0
+            resp_features = pd.DataFrame()
+            resp_features.to_parquet(f'data{os.sep}features{os.sep}{filename[:-4]}_{patient_class.id}_{self.sensor}_features.parquet', engine='fastparquet')
+            # all_acc = pd.concat((all_acc, acc_features), ignore_index=True)
+            
+
+        #all_acc = Patient.correct_patient(all_acc, patient_class.id)
+        # all_acc['timestamp'] = all_acc.index
+        # all_acc.reset_index(drop=True, inplace=True)
+        #all_acc.to_parquet(filepath, engine='fastparquet')
+
+        #return all_acc
+   
 
     def calc_acc_wearable_features(self, patient_class, filepath='', files_list=[]) -> pd.DataFrame:
         """
@@ -361,7 +430,6 @@ class Biosignal():
         features = tsfel.time_series_features_extractor(self.cfg_file, data, fs=self.FS, njobs=-1, header_names=['ACCX', 'ACCY', 'ACCZ', 'ACCM'])
         # extract all features
         return features
-
   
     def get_all_hr_wearable(self, patient_class, filepath='') -> pd.DataFrame:
         """
@@ -424,7 +492,6 @@ class Biosignal():
             return hr_df
         
         hospital_quality = patient_class.get_quality_data(source='hospital')
-
 
         if os.path.isdir(os.path.join(patient_class.dir, 'raw_eeg')):
             hosp_dir = os.path.join(patient_class.dir, 'raw_eeg')
