@@ -12,6 +12,8 @@ import numpy as np
 import pandas as pd
 from scipy.signal import find_peaks, resample
 from scipy.spatial import KDTree
+from statsmodels.tsa.seasonal import seasonal_decompose
+
 
 # local
 
@@ -181,6 +183,7 @@ def resp_rate(signal, sampling_rate):
     respiratory_rates = []
     # Perform sliding window analysis
     start = 0
+    respiratory_times = []
     while start + window_samples <= len(signal):
         # Extract the EDR signal within the current window
         window = signal[start : start + window_samples]
@@ -192,11 +195,14 @@ def resp_rate(signal, sampling_rate):
         average_interval = np.mean(peak_intervals)
         # Calculate the respiratory rate in breaths per minute (BPM)
         respiratory_rate = 60 / average_interval
+        #if respiratory_rate == 2400.0:
+        #    print('problem')
         # Append the respiratory rate to the list
         respiratory_rates.append(respiratory_rate)
         # Move the window
+        respiratory_times.append(start + window_samples)
         start += overlap_samples
-    return respiratory_rates
+    return respiratory_rates, respiratory_times
 
 
 def resp_processing(resp_df, sampling_rate):
@@ -210,17 +216,30 @@ def resp_processing(resp_df, sampling_rate):
 
     # acc magnitude
     # 1) Low pass filtered above 1Hz and downsampled to 5Hz
-    if int(resp_df.std()) == 0:
-        resp_df['resp_rate'] = [0] * len(resp_df)
-        return resp_df
-    segment_filt = bp.signals.tools.filter_signal(resp_df.values, ftype='butter', band='bandpass', frequency=[0.1, 1.], order=2,
+    # if int(resp_df.std()) == 0:
+    #     resp_df['resp_rate'] = [0] * len(resp_df)
+    #     return resp_df
+    # segment_filt = bp.signals.tools.filter_signal(resp_df.values, ftype='butter', band='bandpass', frequency=[0.1, 1.], order=2,
+    #                                               sampling_rate=sampling_rate)['signal']
+    # # downsampling to 5 Hz
+    # segment_filt_downsampled = resample(segment_filt, int(len(segment_filt)*5 / sampling_rate))
+
+    # # 2) Normalisation (mean=0, std=1)
+    # norm_sig = (segment_filt_downsampled - np.mean(segment_filt_downsampled)) / np.std(segment_filt_downsampled)
+    # resp_rates = resp_rate(norm_sig, sampling_rate=5)
+
+    # filtering piezoelectric respiratory signal same processing as described in the morphological autoencoder paper
+    if len(resp_df) < sampling_rate*20:
+        return pd.DataFrame(columns=['RESP', 'ECG'])
+    resp = bp.signals.tools.filter_signal(resp_df['PZT'].values, ftype='butter', band='bandpass', frequency=[0.01, 0.35], order=2,
                                                   sampling_rate=sampling_rate)['signal']
-    # downsampling to 5 Hz
-    segment_filt_downsampled = resample(segment_filt, int(len(segment_filt)*5 / sampling_rate))
-
-    # 2) Normalisation (mean=0, std=1)
-    norm_sig = (segment_filt_downsampled - np.mean(segment_filt_downsampled)) / np.std(segment_filt_downsampled)
-    resp_rates = resp_rate(norm_sig, sampling_rate=5)
-
-    return resp_df
+    resampled = resample(resp, int(len(resp)*80 / sampling_rate))
+    resampled_time = pd.date_range(resp_df.index[0], resp_df.index[-1], periods=len(resampled))
+    # ecg filter
+    ecg = bp.signals.tools.filter_signal(signal=resp_df['ECG'].values,ftype='FIR', band='bandpass', order=200, frequency=[1, 40], sampling_rate=sampling_rate)['signal']
+    # resampling to 80Hz
+    resampled_ecg = resample(ecg, int(len(ecg)*80 / sampling_rate))
+    new_resp_df = pd.DataFrame(resampled, index=resampled_time, columns=['RESP'])   
+    new_resp_df['ECG'] = resampled_ecg
+    return new_resp_df
     

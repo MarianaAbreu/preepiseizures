@@ -271,45 +271,57 @@ class Biosignal():
         #    filepath = f'data{os.sep}features{os.sep}{filename[:-4]}_{patient_class.id}_{self.source}_{self.sensor}_features.parquet'
         # if the filepath already exists, get sensor data without any other processing
         if os.path.isfile(filepath):
-            return pd.read_parquet(filepath)
+            # return pd.read_parquet(filepath)
+            return None
 
         if self.FS is None:
             self.FS = int(1000)
         fs = self.FS
         # directory to sensor files
         filedir = os.path.join(patient_class.dir, patient_class.patient_dict['wearable_dir'])
-        # all_acc = pd.DataFrame()
+        all_resp = pd.DataFrame()
         i = 0
         # if files_list is empty, process all files
         if files_list == []:
-            files_list = os.listdir(filedir)
+            files_list = [file for file in os.listdir(filedir) if file.startswith('A20')]
+        
+        if not os.path.isdir('data' + os.sep + 'respiration' + os.sep + patient_class.id):
+            os.mkdir('data' + os.sep + 'respiration' + os.sep + patient_class.id)
 
         for filename in files_list:
             # get data from one file
             print(f"Processing {i}/{len(files_list)}", end='\r')  
             i += 1
-            if os.path.isfile(f'data{os.sep}features{os.sep}{filename[:-4]}_{patient_class.id}_{self.sensor}_features.parquet'):
-                continue
-            patient_class.datafile.process_chunks(filedir + os.sep + filename, patient_class.patient_dict)
-            data = patient_class.datafile.data_values
-            if data.empty:
-                continue
-            # get a timestamp per sample
-            time_range = pd.date_range(patient_class.datafile.start_date, periods=len(data), freq=str(1/fs)+'S')
-            data.index = time_range            
-            if 'PZT' not in data.columns:
-                raise IOError('No PZT column in data')
-            resp_data = biosignal_processing.resp_processing(data['PZT'], fs)
-            # data values should have std != 0
-            resp_features = pd.DataFrame()
-            resp_features.to_parquet(f'data{os.sep}features{os.sep}{filename[:-4]}_{patient_class.id}_{self.sensor}_features.parquet', engine='fastparquet')
-            # all_acc = pd.concat((all_acc, acc_features), ignore_index=True)
+            filepath = f'data{os.sep}respiration{os.sep}{patient_class.id}{os.sep}{filename[:-4]}_{patient_class.id}_{self.sensor}_data.parquet'
+            if os.path.isfile(filepath):
+                resp_data = pd.read_parquet(filepath)
+            else:
+                patient_class.datafile.process_chunks(filedir + os.sep + filename, patient_class.patient_dict)
+                data = patient_class.datafile.data_values
+                if data.empty:
+                    continue
+                # get a timestamp per sample
+                time_range = pd.date_range(patient_class.datafile.start_date, periods=len(data), freq=str(1/fs)+'S')
+                data.index = time_range            
+                if 'PZT' not in data.columns:
+                    raise IOError('No PZT column in data')
+                resp_data = biosignal_processing.resp_processing(data, fs)
+                # data values should have std != 0
+                resp_data.to_parquet(filepath, engine='fastparquet')
             
+            resp_data['datetime'] = resp_data.index
+            all_resp = pd.concat((all_resp, resp_data), ignore_index=True)
+        
+        all_resp = Patient.correct_patient(all_resp, patient_class.id)
+
+            # all_acc = pd.concat((all_acc, acc_features), ignore_index=True)
+        
 
         #all_acc = Patient.correct_patient(all_acc, patient_class.id)
         # all_acc['timestamp'] = all_acc.index
-        # all_acc.reset_index(drop=True, inplace=True)
-        #all_acc.to_parquet(filepath, engine='fastparquet')
+        all_resp.reset_index(drop=True, inplace=True)
+        all_resp['datetime'] = pd.to_datetime(all_resp['datetime'], infer_datetime_format=True)
+        all_resp.to_parquet(f'data{os.sep}respiration{os.sep}{patient_class.id}_all_respiration_data.parquet', engine='fastparquet')
 
         #return all_acc
    

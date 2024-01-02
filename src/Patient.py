@@ -377,11 +377,12 @@ def patient_class(patient_one):
     """
 
     patient_dict = json.load(open('patient_info.json'))
+    folder_dir = ''
     if patient_dict[patient_one]['source'] == 'HSM':
         folder_dir = f"/Volumes/My Passport/Patients_{patient_dict[patient_one]['source']}"
         if not os.path.isdir(os.path.join(folder_dir, patient_one)):
             # print(f'Patient {patient_one} not in folder')
-            raise FileNotFoundError(f'Patient {patient_one} not in folder')
+            Warning(f'Patient {patient_one} not in folder')
     else:
         folder_dir = f"/Volumes/T7 Touch/PreEpiSeizures/Patients_{patient_dict[patient_one]['source']}"
 
@@ -392,6 +393,19 @@ def patient_class(patient_one):
     return patient
 
 
+def annotation_time_correction(df, dir_):
+    """
+    Correct time based on the file annotations.txt
+    Return correct Dataframe
+    """
+    annotations = pd.read_csv(dir_, header=None, sep='  ', engine='python')
+    # true timestamp 
+    true_time = datetime.strptime(annotations.iloc[0][4], '%Y-%m-%d %H:%M:%S.%f')
+    # corresponding timestamp saved in the Bitalino files
+    unsure_time = datetime.strptime(annotations.iloc[0][6], '%Y-%m-%d %H:%M:%S.%f')
+    # correct the timestamps based on the lag between the two timestamps
+    df['datetime'] += (true_time - unsure_time)
+    return df
 
 def correct_patient(df, patient, patient_dict=json.load(open('patient_info.json'))):
     """ 
@@ -408,15 +422,13 @@ def correct_patient(df, patient, patient_dict=json.load(open('patient_info.json'
     """
     if 'datetime' not in df.columns:
         df['datetime'] = df.index
+    df['datetime'] = df['datetime'].astype('datetime64[ns]')
     dir_ = f"/Volumes/My Passport/Patients_HSM/{patient}/{patient_dict[patient]['wearable_dir']}/annotations.txt"
     if os.path.exists(dir_):
-        annotations = pd.read_csv(dir_, header=None, sep='  ', engine='python')
-        # true timestamp 
-        true_time = datetime.strptime(annotations.iloc[0][4], '%Y-%m-%d %H:%M:%S.%f')
-        # corresponding timestamp saved in the Bitalino files
-        unsure_time = datetime.strptime(annotations.iloc[0][6], '%Y-%m-%d %H:%M:%S.%f')
-        # correct the timestamps based on the lag between the two timestamps
-        df['datetime'] += (true_time - unsure_time)
+        df = annotation_time_correction(df, dir_)
+    if patient in ['BLIW', 'YWJN', 'YIVL']:
+        temporal_shift = patient_dict[patient]['temporal_shift']
+        df['datetime'] += pd.Timedelta(temporal_shift)
         return df
     elif patient == 'QFRK':
         start_date = datetime(2019,7,7,10,4,10,321000)
@@ -457,7 +469,8 @@ def correct_patient(df, patient, patient_dict=json.load(open('patient_info.json'
         df.loc[:timestamp_wrong,'datetime'] = df.iloc[:timestamp_wrong]['datetime'] + lag
         return df
     else:
-        return df
+        pass
+    return df
 
 class HSMdata():
 
