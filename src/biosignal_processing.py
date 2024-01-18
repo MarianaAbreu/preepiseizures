@@ -71,7 +71,7 @@ def ecg_processing_to_hr(ecg_df, sampling_rate):
     """
     ecg_new = pd.DataFrame(index=ecg_df.index, columns=['filtered'])
     # get ecg filtered
-    ecg = bp.signals.tools.filter_signal(signal=ecg_df.values,ftype='FIR', band='bandpass', order=200, frequency=[1, 40], sampling_rate=sampling_rate)['signal']
+    ecg = bp.signals.tools.filter_signal(signal=ecg_df.values,ftype='FIR', band='bandpass', order=int(sampling_rate*1.5), frequency=[0.67, 45], sampling_rate=sampling_rate)['signal']
     # acc magnitude
     ecg_new.loc[:,'filtered'] = ecg
     segments = ecg_new.resample(rule='20S')
@@ -111,9 +111,11 @@ def ecg_processing(ecg_df, sampling_rate):
     Returns the same dataframe with filtered data and resampled to 80Hz
     """
     # get ecg filtered
-    ecg = bp.signals.tools.filter_signal(signal=ecg_df.values,ftype='FIR', band='bandpass', order=200, frequency=[1, 40], sampling_rate=sampling_rate)['signal']
+    ecg = bp.signals.tools.filter_signal(signal=ecg_df.values,ftype='FIR', band='bandpass', 
+                                         order=int(sampling_rate*1.5), frequency=[0.67, 45], 
+                                         sampling_rate = sampling_rate)['signal']
     # resampling to 80Hz
-    resampled = resample(ecg, int(len(ecg)*80 / sampling_rate))
+    resampled = resample(ecg, int(len(ecg) * 80 / sampling_rate))
     resampled_time = pd.date_range(ecg_df.index[0], ecg_df.index[-1], periods=len(resampled))
     ecg_df = pd.DataFrame(resampled, index=resampled_time, columns=['ECG'])    
     # check inversion: calculate rpeaks for the original and inverted signal
@@ -174,11 +176,12 @@ def resp_rate(signal, sampling_rate):
         respiratory rate (float)
     """
 
-    threshold, overlap, window_size = 0.5, 0.5, 30  # Time interval for respiratory rate calculation (in seconds)
+    threshold, overlap, window_size = 0.5, 1, 30  # Time interval for respiratory rate calculation (in seconds), overlap is also in seconds
     # Calculate the number of samples in the window
     window_samples = int(window_size * sampling_rate)  # Adjust 'sampling_rate' as per your EDR signal
     # Calculate the number of samples to overlap
-    overlap_samples = int(window_samples * overlap)
+
+    overlap_samples = int(sampling_rate * overlap)
     # Initialize lists to store the calculated respiratory rates
     respiratory_rates = []
     # Perform sliding window analysis
