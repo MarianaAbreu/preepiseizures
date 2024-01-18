@@ -187,7 +187,7 @@ class Biosignal():
         # hospital_files_ending = [file for file in os.listdir(hosp_dir) if file.lower()[-3:] in ['eeg', 'edf', 'trc']]
         for filename in files_list:
             
-            filepath = f'data{os.sep}segments{os.sep}{patient_class.id}{os.sep}{filename[:-4]}_{patient_class.id}_{self.sensor}_hospital_ecg80.parquet'
+            filepath = f'data{os.sep}segments{os.sep}{patient_class.id}{os.sep}{filename[:-4]}_{patient_class.id}_{self.sensor}_hospital_ecg80_2024.parquet'
             # get ecg data resampled from hospital
             if os.path.isfile(filepath):
                 continue
@@ -203,7 +203,7 @@ class Biosignal():
                 ecg_df = biosignal_processing.ecg_processing(hosp_ecg, self.FS)
                 if not os.path.isdir('data' + os.sep + 'segments' + os.sep + patient_class.id):
                     os.mkdir('data' + os.sep + 'segments' + os.sep + patient_class.id)
-                ecg_df.to_parquet(f'data{os.sep}segments{os.sep}{patient_class.id}{os.sep}{filename[:-4]}_{patient_class.id}_{self.sensor}_hospital_ecg80.parquet', engine='fastparquet')
+                ecg_df.to_parquet(filepath, engine='fastparquet')
         return 1
     
     def calc_ecg_hospital_segments(self, patient_class, filepath='', files_list=[]) -> pd.DataFrame:
@@ -241,10 +241,6 @@ class Biosignal():
         all_ecg = pd.concat([pd.read_parquet(os.path.join(filedir, file)) for file in files_list])
         all_ecg = Patient.correct_patient(all_ecg, patient_class.id)
         all_ecg.drop(columns=['datetime'], inplace=True)
-        if patient_class.id in ['BLIW', 'YWJN', 'YIVL']:
-            temporal_shift = patient_class.patient_dict['temporal_shift']
-            all_ecg.index = all_ecg.index + pd.Timedelta(temporal_shift)
-
         segment_times = pd.date_range(all_ecg.index[0], all_ecg.index[-1], freq=str((window*overlap).total_seconds()) + 'S')
         all_ecg['timestamp'] = all_ecg.index
         all_ecg.reset_index(drop=True, inplace=True)

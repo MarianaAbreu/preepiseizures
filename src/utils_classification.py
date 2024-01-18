@@ -164,9 +164,9 @@ def autoencoder_params(encoding_dim_,input_len, list_layers, a_fun, optimizer, l
                     validation_data=(x_test, y_test))
 
 
-    pickle.dump(autoencoder, open(label + '_autoencoder', 'wb'))
-    pickle.dump(decoder, open(label + '_decoder', 'wb'))
-    pickle.dump(encoder, open(label + '_encoder', 'wb'))
+    pickle.dump(autoencoder, open(label, 'wb'))
+    pickle.dump(decoder, open(label, 'wb'))
+    pickle.dump(encoder, open(label, 'wb'))
 
     return autoencoder, encoder, decoder
 
