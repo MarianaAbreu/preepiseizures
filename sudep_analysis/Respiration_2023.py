@@ -14,9 +14,11 @@ import numpy as np
 import pandas as pd
 from scipy.signal import resample
 from scipy.stats import pearsonr
+from tqdm import tqdm
 
 # local libraries
-import utils_classification as uc
+import preepiseizures.src.utils_classification as uc 
+from preepiseizures.src import Patient
 
 
 def load_rgbt_data(dir='', again=True, overlap=0.95):
@@ -97,34 +99,41 @@ def load_rgbt_data(dir='', again=True, overlap=0.95):
     return respiration_data
 
 
-def respiration_training(rgbt_data, test_size=0.2, again = False):
+def respiration_training(rgbt_data, test_size=0.2, again = False, label = 'RGBT_Free_only'):
     """
     Train the AutoEncder with Respiration Segments
     :param rgbt_data: RGBT data
     :return: respiration_data
     """
-    label = 'RGBT'
-    if again:
+    if (again) or (not os.path.isfile(label + '_autoencoder.pickle')):
         # get the indices of the respiration segments
-        loss = 'cosine_similarity'
-        activ ='tanh'
+        loss = 'mse' #'cosine_similarity'
+        activ = 'relu' # 'sigmoid' #'tanh'
         opt ='adam'
-        
+        # loss = 'mse'
+        # normalize between 0 and 1 (it was between 0 and 100)
+        # rgbt_data = rgbt_data/100
         epochs = 300
-        nodes = [500, 250, 50]
+        nodes = [750, 500, 300, 250, 100]
         # get the test users
-        test_users = rgbt_data['User'].unique()[-int(len(rgbt_data['User'].unique()) * test_size):]
-        # get the training and test data
-        x_test = rgbt_data.loc[rgbt_data['User'].isin(test_users)].drop(['User', 'Label', 'Segment'], axis=1)
-        x_train = rgbt_data.loc[rgbt_data['User'].isin(test_users) == False].drop(['User', 'Label', 'Segment'], axis=1)
+        if 'RGBT' in label:
+            test_users = rgbt_data['User'].unique()[-int(len(rgbt_data['User'].unique()) * test_size):]
+            # get the training and test data
+            x_test = rgbt_data.loc[rgbt_data['User'].isin(test_users)].drop(['User', 'Label', 'Segment'], axis=1)
+            x_train = rgbt_data.loc[rgbt_data['User'].isin(test_users) == False].drop(['User', 'Label', 'Segment'], axis=1)
+        
+        else:
+            idx_split = int(len(rgbt_data)*(1-test_size))
+            x_test = rgbt_data.iloc[idx_split:]
+            x_train = rgbt_data.iloc[:idx_split]
         # train the autoencoder
         modelAE, encAE, decAE = uc.autoencoder_params(nodes[-1], 1000, nodes, activ, opt, loss,
                             x_train, x_train, x_test, x_test, label, epochs)
     else: 
         # load the autoencoder
-        modelAE = pickle.load(open(label + '_autoencoder', 'rb'))
-        encAE = pickle.load(open(label + '_encoder', 'rb'))
-        decAE = pickle.load(open(label + '_decoder', 'rb'))
+        modelAE = pickle.load(open(label + '_autoencoder.pickle', 'rb'))
+        encAE = pickle.load(open(label + '_encoder.pickle', 'rb'))
+        decAE = pickle.load(open(label + '_decoder.pickle', 'rb'))
     
     return modelAE, encAE, decAE
 
@@ -157,7 +166,7 @@ def epilepsy_respiration_data(patient='BLIW', modelAE = None, encoder=None, deco
     # get the data
     data = pd.read_parquet('data/respiration/{patient}_all_respiration_data.parquet'.format(patient=patient))
     # segment into 60s segments resampled to 1000 points
-    timestamps_segments = pd.date_range(start=data['datetime'].iloc[0], end=data['datetime'].iloc[-1]-pd.Timedelta(seconds=60), freq='60s')
+    timestamps_segments = pd.date_range(start=data['datetime'].iloc[0], end=data['datetime'].iloc[-1]-pd.Timedelta(seconds=60), freq='1s')
     data_segments = list(map(lambda x: process_segment_resp(data.loc[data['datetime'].between(x, x+pd.Timedelta(seconds=60))]), timestamps_segments))
     data_segments = pd.concat(list(filter(lambda x: not x.empty, data_segments)))
     # run the autoencoder
@@ -176,20 +185,140 @@ def correlation(sig1, sig2, points=10):
     The correlation used will be the pearson correlation
     The number of correlation points is also an input
     """
+    if len(sig2.dropna()) != len(sig2):
+        print('Nan in sig2')
+        return np.array([np.nan]*points) 
     # divide the signal into k windows (k = points)
     sig1_windows = np.array(np.array_split(sig1, points))
     sig2_windows = np.array(np.array_split(sig2, points))
     # compute the correlation between the windows
-    return np.array(list(map(lambda i: pearsonr(sig1_windows[i], sig2_windows[i])[0], range(points))))
+
+    return np.array(list(map(lambda i:pearsonr(sig1_windows[i], sig2_windows[i])[0], range(points))))
+
+
+import numpy as np
+import pandas as pd
+from scipy.signal import resample
+from concurrent.futures import ProcessPoolExecutor
+
+def process_segment_resp(segment):
+    """
+    Process one respiration segment
+    :param segment: respiration segment
+    :return: processed segment
+    """
+    sampling_rate = 80
+
+    if len(segment) != 60 * sampling_rate:
+        # segment has less than 60 seconds
+        return pd.DataFrame()
+
+    # resample segment to 1000 points
+    resp_data = resample(segment['RESP'], 1000)
+
+    # normalize resp_data
+    norm_resp_data = 100 * (resp_data - np.min(resp_data)) / (np.max(resp_data) - np.min(resp_data))
+
+    # get the output of the autoencoder
+    return pd.DataFrame([norm_resp_data], index=[segment['datetime'].iloc[0]])
+
+
+def process_batch(timestamps, data):
+    """
+    Process one batch of timestamps
+    :param timestamps: timestamps to process
+    :param data: data to process
+    :return: processed segments
+    """
+    
+    segments = []
+    for x in tqdm(timestamps, desc="Processing", unit="batch"):
+        segment = data.loc[data['datetime'].between(x, x + pd.Timedelta(seconds=60))]
+        processed_segment = process_segment_resp(segment)
+        if not processed_segment.empty:
+            segments.append(processed_segment)
+    return segments
+
+
+def epilepsy_dataset(data, timestamps_segments_train, train_path = '', slide=1, window=60):
+    """
+    Load the respiration data from the PreEpiSeizures dataset
+
+    :param data: data to process
+    :param train_path: path to save the training data (if exists, no process will occur)
+    :param slide: slide of the window (in seconds) (is the opposite of the overlap)
+    :param window: window size (in seconds)
+
+    :return: data
+    """
+
+    if train_path == '':
+        train_path = f'{patient}_data_segments_train_20p_{slide}s.parquet'
+
+
+    if not os.path.isfile(train_path):
+
+        list_train_data = []
+        i = timestamps_segments_train[0]
+        k = 0
+        len_ = len(timestamps_segments_train)
+        while i + pd.Timedelta(seconds=window) < timestamps_segments_train[-1]:
+            print(f'Processing segment {k}/{len_}',end='\r')
+            segment = data.loc[data['datetime'].between(i, i + pd.Timedelta(seconds=window))].copy()
+            if len(segment) == 60 * 80:
+                list_train_data.append(process_segment_resp(segment))
+            k += 1
+            i += pd.Timedelta(seconds=slide)
+        if len(list_train_data) == 0:
+            print('No segments found')
+            return pd.DataFrame()
+        train_segments = pd.concat(list_train_data)
+        train_segments.rename(columns={i:str(i) for i in range(1000)}, inplace=True)
+
+        train_segments.to_parquet(train_path, engine='fastparquet')
+
+    else:
+        train_segments = pd.read_parquet(train_path)
+
+    train_segments = train_segments/100
+    return train_segments
 
 
 if __name__ == '__main__':
     # load RGBT data
-    rgbt_data = load_rgbt_data(again=False, overlap=0.8)
-    print(len(rgbt_data), ' segments loaded')
+    #rgbt_data = load_rgbt_data(again=False, overlap=0.8)
+    #print(len(rgbt_data), ' segments loaded')
     # extract respiration data
-    modelAE, encAE, decAE = respiration_training(rgbt_data, again=False)
-    patient_resp = [pat.split('_')[0] for pat in os.listdir('data/respiration/') if '_all_respiration' in pat]
+    # only free breathing 
+    patient = 'BLIW'
+    data = pd.read_parquet('data/respiration/{patient}_all_respiration_data.parquet'.format(patient=patient))
+    # use 20% of the data for training
+    # timestamps of the segments
+    slide, window = 1, 60
+    timestamps_segments = pd.date_range(start=data['datetime'].iloc[0], end=data['datetime'].iloc[-1]-pd.Timedelta(seconds=60), freq=f'{slide}s')
+    # only use 20% of the data for training
+    timestamps_segments_train_limit = timestamps_segments[0] + (timestamps_segments[-1] - timestamps_segments[0]) * 0.2
+    timestamps_segments_train = timestamps_segments[timestamps_segments<timestamps_segments_train_limit]
+    train_data = data.loc[data['datetime'].between(timestamps_segments_train[0], timestamps_segments_train[-1])].copy()
+    train_segments = epilepsy_dataset(train_data, timestamps_segments_train, slide=slide, window=window)
+    # validation data around seizure
+    patient_info = Patient.patient_class(patient)
+    patient_info.get_seizure_annotations()
+    #onset = patient_info.seizure_table.iloc[1]['Timestamp']
+    #seizure_data = data.loc[data['datetime'].between(onset-pd.Timedelta(minutes=30), onset+pd.Timedelta(minutes=30))].copy()
+    #timestamps_segments_seizure = pd.date_range(start=seizure_data['datetime'].iloc[0], end=seizure_data['datetime'].iloc[-1]-pd.Timedelta(seconds=60), freq=f'{slide}s')
+    timestamps_segments_validation = pd.date_range(start=timestamps_segments_train_limit, end=data['datetime'].iloc[-1]-pd.Timedelta(seconds=60), freq='60s')
+
+    validation_data = data.loc[data['datetime'].between(timestamps_segments_validation[0], timestamps_segments_validation[-1])].copy()
+    validation_segments = epilepsy_dataset(validation_data, timestamps_segments_validation, train_path=f'{patient}_validation_data_60s.parquet', slide=60, window=window)
+
+
+    modelAE, encAE, decAE = respiration_training(train_segments, again=False, label='BLIW_1s')
+    output_val = modelAE.predict(validation_segments)
+    corr_ = np.array(list(map(lambda i: correlation(output_val[i], validation_segments.iloc[i]), range(len(output_val)))))
+    corr_df = pd.DataFrame(corr_, index= validation_segments.index, columns=[str(i) for i in range(len(corr_[0]))])
+    time_corr_points = [pd.date_range(corr_df.index[i], corr_df.index[i]+pd.Timedelta(seconds=60), periods=10) for i in range(len(corr_df.index))]
+    corr_points = pd.DataFrame(np.hstack(corr_df.values), index=np.hstack(time_corr_points))
 
     for patient in patient_resp:
         if patient in ['LCGM', 'RLJW', 'DQXF', 'FFRZ', 'UWEF', 'OXDN']:
