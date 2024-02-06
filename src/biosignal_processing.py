@@ -8,14 +8,14 @@
 
 # external
 import biosppy as bp
+import biosppy.quality as quality
 import numpy as np
 import pandas as pd
 from scipy.signal import find_peaks, resample
 from scipy.spatial import KDTree
 from statsmodels.tsa.seasonal import seasonal_decompose
 
-
-# local
+from preepiseizures.src import hrv_features_choice
 
 def acc_processing(acc_df, sampling_rate):
     """
@@ -128,7 +128,8 @@ def ecg_processing(ecg_df, sampling_rate):
         else:
             good_ecg = temp_ecg.copy()
         if start_time >= ecg_df.index[-1]:
-            print('problem')
+            # if no good ecg is found, return the original ecg
+            print('\n no good ecg found')
 
     if (good_ecg is None) or (len(good_ecg) < 400):
         good_ecg = ecg_df.copy()
@@ -165,18 +166,21 @@ def ecg_processing(ecg_df, sampling_rate):
     return ecg_df
 
 
-def resp_rate(signal, sampling_rate):
+def resp_rate(signal, sampling_rate, threshold=0.5, overlap=1, window_size=30):
     """
     Get respiratory rate from a respiratory signal
     ----
     Parameters:
         signal (array): respiratory signal
         sampling_rate (int): sampling rate
+        threshold (float): threshold for peak detection
+        overlap (float): overlap between windows (in seconds)
+        window_size (float): window size for respiratory rate calculation (in seconds)
     Returns:
         respiratory rate (float)
     """
 
-    threshold, overlap, window_size = 0.5, 1, 30  # Time interval for respiratory rate calculation (in seconds), overlap is also in seconds
+    # window Time interval for respiratory rate calculation (in seconds), overlap is also in seconds
     # Calculate the number of samples in the window
     window_samples = int(window_size * sampling_rate)  # Adjust 'sampling_rate' as per your EDR signal
     # Calculate the number of samples to overlap
@@ -245,4 +249,161 @@ def resp_processing(resp_df, sampling_rate):
     new_resp_df = pd.DataFrame(resampled, index=resampled_time, columns=['RESP'])   
     new_resp_df['ECG'] = resampled_ecg
     return new_resp_df
+
+
+def get_ecg_quality(data, sampling_rate=80):
+    """
+    """
+    if len(data) > 5*sampling_rate:
+        return quality.quality_ecg(data['ECG'], methods=['Level3'], sampling_rate=sampling_rate)[0]
+    # segments10s = data.reshape(-1, 10*80)
+    # get quality levels for each 10 second segment
+    #quality_levels = np.array(list(map(lambda x: quality.quality_ecg(x, methods=['Level3'], sampling_rate=sampling_rate)[0], segments10s)))
+    # 
+    #return data
+
+def get_rpeaks(data, sampling_rate=80):
+    """
+    """
+    if len(data) > 5*sampling_rate:
+        r_peaks = bp.signals.ecg.hamilton_segmenter(signal=data['ECG'].values, sampling_rate=sampling_rate)[0]
+        r_peaks = bp.signals.ecg.correct_rpeaks(signal=data['ECG'].values, rpeaks=r_peaks, sampling_rate=sampling_rate, tol=0.05)[0]
+        return r_peaks
+    else:
+        return None
     
+
+FBANDS = {'vlf': [0.003, 0.04],
+          'lf': [0.04, 0.15],
+          'hf': [0.15, 0.4]
+          }
+
+def get_hrv_train(data, overlap=pd.Timedelta(minutes=4), sampling_rate=80):
+    """Get HRV features for a given data
+    The data needs to have datetime as index (called datetime) and ECG as column.
+    Segments of 5 minutes will be taken and HRV will be calculated for each segment.
+    Before calculating HRV, the quality of the segment is checked. 
+    The rpeaks that are in segments with quality level 0 are removed.
+    The remaining rpeaks are used to calculate HRV.
+    The HRV will implement rri_correction that fills the gaps in the rri series by interpolation.
+    In the end, an additional column is added (daypart) that divides the time into 3 parts of 8 hours (night, morning and evening).
+
+
+    """
+    # reset index to get datetime as column
+    data = data.reset_index().copy()
+    # get first datetime
+    i = data['datetime'].iloc[0]
+    window = pd.Timedelta(minutes=5)
+    step = window - overlap
+
+    hrv_df = pd.DataFrame()
+
+    length = data['datetime'].iloc[-1]
+    while i + window < data['datetime'].iloc[-1]:
+        segment5m = data.loc[data['datetime'].between(i, i + window)]
+        print(f'{i}/{length}', end='\r')
+        
+        if len(segment5m) < 80*250: 
+            i += step
+            continue
+
+        # get quality levels for each 10 second segment
+        r_peaks_good = segment5m[(segment5m['rpeaks'] == 1) & (segment5m['quality']>0)].index
+
+        if (not r_peaks_good.any()) or (r_peaks_good[-1] - r_peaks_good[0] < 80 * 90):
+            i += step
+            continue
+        
+        # get hrv
+        rri = 1000*(r_peaks_good[1:] - r_peaks_good[:-1])/80
+        if len(rri) < 50:
+            i += step
+            continue
+        rri = hrv_features_choice.rri_correction(rri)
+        rri_det, _ = hrv_features_choice.detrend_window(rri)
+        duration = np.sum(rri) / 1000.
+        if duration < 90:
+            i += step
+            continue
+
+        hrv_time = hrv_features_choice.hrv_timedomain(rri=rri,
+                                                      duration=duration,
+                                                      detrend_rri=True,
+                                                      show=False,
+                                                      rri_detrended=rri_det)
+        hrv_freq = hrv_features_choice.hrv_frequencydomain(rri=rri,
+                                                           duration=duration,
+                                                           detrend_rri=True,
+                                                           show=False,
+                                                           fbands=FBANDS)
+        hrv_nonlinear = hrv_features_choice.hrv_nonlinear(rri=rri, 
+                                                          duration=duration,
+                                                          detrend_rri=True,
+                                                          show=False,
+                                                          rri_detrended=rri_det)
+        hrv_info = {**hrv_time, **hrv_freq, **hrv_nonlinear}
+                                                           
+        # hrv datetime is the end of the 5 minute segment
+        hrv_df = pd.concat([hrv_df, pd.DataFrame(hrv_info, index=[i+window])])
+        i += step
+
+    hrv_df['daypart'] = hrv_df.index
+    hrv_df['daypart'] = hrv_df['daypart'].dt.hour//8
+    return hrv_df
+
+
+
+
+def get_hrv_for_data(data, overlap=pd.Timedelta(minutes=4), sampling_rate=80):
+    """Get HRV features for a given data
+    The data needs to have datetime as index (called datetime) and ECG as column.
+    Segments of 5 minutes will be taken and HRV will be calculated for each segment.
+    Before calculating HRV, the quality of the segment is checked. 
+    The rpeaks that are in segments with quality level 0 are removed.
+    The remaining rpeaks are used to calculate HRV.
+    The HRV will implement rri_correction that fills the gaps in the rri series by interpolation.
+    In the end, an additional column is added (daypart) that divides the time into 3 parts of 8 hours (night, morning and evening).
+
+
+    """
+    # reset index to get datetime as column
+    data = data.reset_index().copy()
+    # get first datetime
+    i = data['datetime'].iloc[0]
+    window = pd.Timedelta(minutes=5)
+    step = window - overlap
+
+    hrv_df = pd.DataFrame()
+
+    while i + window < data['datetime'].iloc[-1]:
+        segment5m = data.loc[data['datetime'].between(i, i + window)]
+        
+        if len(segment5m) < 24000:
+            i += step
+            continue
+        ecg_values = segment5m['ECG'].values[:24000]
+        segments10s = ecg_values.reshape(-1, 10*80)
+        # get quality levels for each 10 second segment
+        quality_levels = np.array(list(map(lambda x: quality.quality_ecg(x, methods=['Level3'], sampling_rate=80)[0], segments10s)))
+        # calculate r peaks
+        r_peaks = bp.signals.ecg.hamilton_segmenter(signal=ecg_values, sampling_rate=sampling_rate)[0]
+        r_peaks = bp.signals.ecg.correct_rpeaks(signal=ecg_values, rpeaks=r_peaks, sampling_rate=sampling_rate, tol=0.05)[0]
+        # remove r peaks that are in segments with quality level 0
+        # r_peaks_good = [r_peak for r_peak in r_peaks if quality_levels[int(r_peak/800)] > 0]
+        r_peaks_good = r_peaks[quality_levels[r_peaks // 800] > 0]
+
+        if (not r_peaks_good.any()) or (r_peaks_good[-1] - r_peaks_good[0] < 80 * 90):
+            i += step
+            continue
+        
+        # get hrv
+        hrv_info = bp.signals.hrv.hrv(rpeaks=r_peaks_good, sampling_rate=80, show=False)
+        
+        # hrv datetime is the end of the 5 minute segment
+        hrv_df = pd.concat([hrv_df, pd.DataFrame(hrv_info.as_dict(), index=[i+window])])
+        i += step
+    hrv_df['daypart'] = hrv_df.index
+    hrv_df['daypart'] = hrv_df['daypart'].dt.hour//8
+    return hrv_df
+

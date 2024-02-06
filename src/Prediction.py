@@ -94,7 +94,6 @@ class DatasetPred:
         new_data.set_index('datetime', inplace=True)
         return new_data
 
-
     def train_test_split(self, data, train_sz):
         """
         Split the dataset into train and test putting 3 seizures in the training
@@ -110,10 +109,11 @@ class DatasetPred:
 
         assert type(data.index) == pd.core.indexes.datetimes.DatetimeIndex, "The index of the data should be a datetimeindex"
 
-        print("The whole dataset contains {} seizures".format(data["onset"].max()))
+        # print("The whole dataset contains {} seizures".format(data["onset"].max()))
         new_data = data.reset_index().copy()
         # The train set will have the first 3 seizures (which can be 1,2,3 or 1,2,5 as example)
         # Since 0 will also ocupy its space, the train set will end in the position 3
+        assert len(new_data["onset"].unique()) > train_sz, "The number of seizures in the dataset is smaller than the number of seizures to be used in the training"
         third_seizure_onset = new_data.loc[new_data['onset'] == new_data["onset"].unique()[train_sz]].index[0]
         # train e test datasets
         x_train = new_data.loc[:third_seizure_onset]
@@ -125,7 +125,28 @@ class DatasetPred:
 
         return x_train, x_test
         
+    def annotate_data(self, data, preictal0 = 45, preictal1 = 15):
+        """
+        Annotate the data into interictal and preictal
+        :param data: dataframe with the data with datetimeindex called "datetime"
+        :param patient_info: patient information
+        :param preictal0: start of the preictal period in minutes
+        :param preictal1: end of the preictal period in minutes
+        """
+        assert data.index.name == 'datetime', "The index of the data should be named datetime"
 
+        data['Y'] = 'interictal'
+        data.reset_index(inplace=True)
+        # get seizure onsets
+        onsets = data['onset'].drop_duplicates()
+        for onset in onsets.iloc[1:].index:
+            data.loc[data['datetime'].between(data['datetime'][onset] - pd.Timedelta(minutes=preictal0), 
+                                              data['datetime'][onset] - pd.Timedelta(minutes=preictal1)), 'Y'] = 'preictal'
+            data.loc[data['datetime'].between(data['datetime'][onset] - pd.Timedelta(minutes=preictal1), 
+                                              data['datetime'][onset] + pd.Timedelta(minutes=120)), 'Y'] = 'removefromtrain'
+            
+        data.set_index('datetime', inplace=True)
+        return data
 
 class PredictionEval():
 
