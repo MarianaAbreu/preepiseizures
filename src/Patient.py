@@ -483,7 +483,7 @@ class HSMdata():
         """
         Read edf file data
         Parameters:
-            filedir (str): directory where the file is located
+            filedir (str): directory where the file is located and the filename
         Returns:
             array: array with data
             datetime: start date of the file
