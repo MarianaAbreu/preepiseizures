@@ -113,7 +113,7 @@ if __name__ == '__main__':
         if patient in ['YWJN', 'BLIW']:
             continue
         print('Processing patient: ', patient)
-        corr_points_file = f'preepiseizures{os.sep}sudep_analysis{os.sep}{patient}_corr_points_{slide}s.parquet'
+        corr_points_file = f'data{os.sep}autoencoders_epilepsy{os.sep}{patient}_corr_points_{slide}s.parquet'
         #if os.path.exists(corr_points_file):
         #    print('Correlation points already calculated for patient: ', patient)
         #    continue
@@ -125,16 +125,26 @@ if __name__ == '__main__':
             continue
 
         # TRAINING SEGMENTS ----
-        train_segments, timestamps_segments_train_limit = get_training_segments(data, slide, window)
+        train_segments_file = f'data/autoencoders_epilepsy{os.sep}{patient}_data_segments_train_20p_{slide}s.parquet'
+        if os.path.exists(train_segments_file):
+            train_segments = pd.read_parquet(train_segments_file)
+            timestamps_segments_train_limit = train_segments.index[-1]
+        else:
+            train_segments, timestamps_segments_train_limit = get_training_segments(data, slide, window)
         if train_segments.empty:
             print('No training segments for patient: ', patient)
             continue
         # TRAINING AUTOENCODER -
-        label = f'preepiseizures{os.sep}sudep_analysis{os.sep}{patient}_{slide}s'
-        modelAE, encAE, decAE = Respiration_2023.respiration_training(train_segments, again=True, label=label)
+        label = f'data{os.sep}autoencoders_epilepsy{os.sep}{patient}_{slide}s'
+        modelAE, encAE, decAE = Respiration_2023.respiration_training(train_segments, again=False, label=label)
 
         # VALIDATION DATA ------
-        validation_segments = get_validation_segments(data, timestamps_segments_train_limit, window)
+        validation_segments_file = f'data/autoencoders_epilepsy{os.sep}{patient}_validation_data_60s_timecorrected.parquet'
+        if os.path.exists(validation_segments_file):
+            validation_segments = pd.read_parquet(validation_segments_file)
+        else:
+            validation_segments = get_validation_segments(data, timestamps_segments_train_limit, window)
+
         output_val = modelAE.predict(validation_segments)
 
         # IO Correlation --------
