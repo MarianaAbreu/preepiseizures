@@ -175,13 +175,13 @@ class Biosignal():
         if files_list == []:
             print('No files found')
             return -1
-        if patient_class.patient_dict['source'] == 'HEM':
+        if patient_class.patient_dict['source'] in ['HEM', 'HEM/Retrospective']:
             hosp_class = Patient.HEMdata(patient_id=patient_class.id, dir=patient_class.dir)
         else:
             hosp_class = Patient.HSMdata(patient_id=patient_class.id, dir=patient_class.dir)
         
         self.FS = int(hosp_class.FS)
-        print(files_list)
+        # print(files_list)
         i = 0
         # termination of files is different for each hospital
         # hospital_files_ending = [file for file in os.listdir(hosp_dir) if file.lower()[-3:] in ['eeg', 'edf', 'trc']]

@@ -80,12 +80,17 @@ class Patient():
         if self.patient_dict['source'] == 'HSM':
 
             excel_file = 'Patients_HSM_.xlsx'
+            source_folder = 'Patients_HSM'
+            sheet_name = self.id
         
         else:
             excel_file = 'Pat_HEM.xlsx'
+            source_folder = 'Patients_HEM'
+            sheet_name = self.patient_dict['touch']
         try:
-            seizure_table = pd.read_excel(os.path.join('/Volumes', 'T7 Touch', 'PreEpiSeizures', 'Patients_'+self.patient_dict['source'], excel_file), sheet_name=self.patient_dict['touch'])
-            self.seizure_table = seizure_table[seizure_table['Crises'].notna()].copy()
+            seizure_table = pd.read_excel(os.path.join('/Volumes', 'T7 Touch', 'PreEpiSeizures', source_folder, excel_file), sheet_name=sheet_name)
+            self.seizure_table = seizure_table.loc[seizure_table[['Focal / Generalisada', 'Crises', 'Hora Clínica']].dropna().index].copy()
+
         except:
             if self.patient_dict['wearable_dir'] == '':
                 print(f"Seizure label file not found for patient {self.id} but also no wearable data")
@@ -93,7 +98,7 @@ class Patient():
                 print(f"Seizure label file not found for patient {self.id}")
         if (self.seizure_table.empty or self.seizure_table['Crises'].iloc[0] == 0):
             print(f"No seizure annotations found for patient {self.id}")
-            return None
+            return -1
         self.seizure_table.loc[:, 'Data'] = [datetime.strptime(date, '%d-%m-%Y') if type(date) is str else date for date in self.seizure_table['Data']]
         self.seizure_table.loc[:, 'Timestamp'] = [datetime.combine(self.seizure_table.iloc[sidx]['Data'], 
                                                             self.seizure_table.iloc[sidx]['Hora Clínica']) for 
@@ -386,8 +391,9 @@ def patient_class(patient_one):
     else:
         folder_dir = f"/Volumes/T7 Touch/PreEpiSeizures/Patients_{patient_dict[patient_one]['source']}"
 
-    if patient_dict[patient_one]['wearable_dir'] == '':
+    if (patient_dict[patient_one]['wearable_dir'] == '') and (patient_dict[patient_one]['hospital_dir'] == ''):
         #raise FileNotFoundError(f'Patient {patient_one} has no wearable data')
+        print(f'Patient {patient_one} has no wearable nor data')
         return None
     patient = Patient(patient_one, folder_dir)
     return patient
